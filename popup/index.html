@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI Email Assistant</title>
+  <link rel="stylesheet" href="../styles/popup.css">
+</head>
+<body>
+  <div class="container">
+    <h2>AI Email Assistant</h2>
+    
+    <div class="settings">
+      <h3>API Settings</h3>
+      <label for="apiKey">OpenAI API Key:</label>
+      <input type="password" id="apiKey" placeholder="Enter your API key">
+    </div>
+
+    <div class="persona-settings">
+      <h3>Persona Settings</h3>
+      <label for="name">Your Name:</label>
+      <input type="text" id="name" placeholder="Enter your name">
+      
+      <label for="role">Professional Role:</label>
+      <input type="text" id="role" placeholder="e.g., Software Engineer, Marketing Manager">
+      
+      <label for="style">Writing Style:</label>
+      <select id="style">
+        <option value="professional">Professional</option>
+        <option value="friendly">Friendly</option>
+        <option value="casual">Casual</option>
+        <option value="formal">Formal</option>
+      </select>
+      
+      <label for="context">Additional Context:</label>
+      <textarea id="context" placeholder="Add any specific details about your role, company, or communication preferences"></textarea>
+    </div>
+
+    <button id="saveSettings">Save Settings</button>
+    <div class="status" id="status"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html> 
