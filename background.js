@@ -23,19 +23,71 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 async function getStoredSettings() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(['openaiApiKey', 'persona'], resolve)
+    chrome.storage.sync.get([
+      'openaiApiKey',
+      'activePersona',
+      'personas'
+    ], (result) => {
+      // Initialize default persona if none exists
+      if (!result.personas) {
+        result.personas = {
+          default: {
+            name: '',
+            role: '',
+            tonePresets: {
+              default: {
+                style: 'professional',
+                context: ''
+              }
+            },
+            contexts: {
+              business: '',
+              technical: '',
+              personal: ''
+            },
+            customAttributes: {}
+          }
+        }
+      }
+      
+      // Set active persona to default if not set
+      if (!result.activePersona) {
+        result.activePersona = 'default'
+      }
+      
+      resolve({
+        openaiApiKey: result.openaiApiKey,
+        persona: result.personas[result.activePersona]
+      })
+    })
   })
 }
 
-function generateSystemPrompt(persona, emailContext) {
-  return `You are an experienced professional crafting an email response. You write as ${persona.name}, a ${persona.role}.
+function generateSystemPrompt(persona, emailContext, customInstruction = '') {
+  // Analyze email context for tone adjustment
+  const contextSignals = analyzeEmailContext(emailContext)
+  
+  // Select appropriate tone preset based on context
+  const tonePreset = selectTonePreset(persona, contextSignals)
+  
+  // Build context-aware prompt
+  return `You are an experienced professional crafting an email response as ${persona.name}.
 
-Key guidelines for your response:
-1. Write with natural variation in sentence structure - mix short, punchy sentences with more complex ones
-2. Be direct and genuine - avoid unnecessary formality or redundant acknowledgments
-3. Focus on the key points that need addressing
-4. Express thoughts naturally as ${persona.name} would, not as a template response
-5. Maintain ${persona.style} tone while being authentic
+Role & Context:
+- Professional Role: ${persona.role}
+- Communication Style: ${tonePreset.style}
+- Situational Context: ${contextSignals.situation}
+${persona.contexts[contextSignals.contextType] ? `- Domain-Specific Context: ${persona.contexts[contextSignals.contextType]}` : ''}
+${tonePreset.context ? `- Tone-Specific Guidelines: ${tonePreset.context}` : ''}
+${customInstruction ? `- Custom Instruction: ${customInstruction}` : ''}
+
+Key Response Guidelines:
+1. Write naturally as ${persona.name} would, adapting to the detected ${contextSignals.situation} situation
+2. Maintain ${tonePreset.style} tone while being authentic and contextually appropriate
+3. Focus on addressing key points with clarity and purpose
+4. Use natural sentence variations - mix concise and detailed expressions
+5. Be direct and genuine, avoiding unnecessary formality
+${customInstruction ? '6. Follow the custom instruction while maintaining persona and style' : ''}
 
 Strict Email Format:
 1. Start with a greeting line ending with a comma (e.g., "Hey there,")
@@ -44,8 +96,6 @@ Strict Email Format:
 4. Add exactly ONE empty line before the closing
 5. End with "Cheers," or similar on its own line
 6. Add your name "${persona.name}" on the final line
-
-Additional context about you: ${persona.context}
 
 Remember:
 - No subject line - this is a thread reply
@@ -57,7 +107,93 @@ Email thread to respond to:
 ${emailContext}`
 }
 
-async function generateReply(emailContent) {
+function analyzeEmailContext(emailContent) {
+  // Default context
+  const context = {
+    situation: 'standard communication',
+    contextType: 'business',
+    emotionalTone: 'neutral'
+  }
+
+  // Keywords and patterns for different situations
+  const patterns = {
+    negotiation: /(cost|price|terms|agreement|proposal|offer|deal|contract)/i,
+    support: /(help|issue|problem|error|bug|trouble|support|assist)/i,
+    technical: /(api|integration|code|development|technical|implementation)/i,
+    urgent: /(urgent|asap|emergency|immediate|priority)/i,
+    apology: /(apologi|sorry|mistake|error|issue|concern)/i,
+    gratitude: /(thank|appreciate|grateful|pleased)/i
+  }
+
+  // Check for situation-specific patterns
+  if (patterns.negotiation.test(emailContent)) {
+    context.situation = 'negotiation'
+    context.emotionalTone = 'firm but collaborative'
+  } else if (patterns.support.test(emailContent)) {
+    context.situation = 'support'
+    context.emotionalTone = 'helpful and solution-oriented'
+  } else if (patterns.technical.test(emailContent)) {
+    context.situation = 'technical discussion'
+    context.contextType = 'technical'
+    context.emotionalTone = 'precise and informative'
+  } else if (patterns.urgent.test(emailContent)) {
+    context.situation = 'urgent matter'
+    context.emotionalTone = 'prompt and focused'
+  } else if (patterns.apology.test(emailContent)) {
+    context.situation = 'issue resolution'
+    context.emotionalTone = 'apologetic and constructive'
+  } else if (patterns.gratitude.test(emailContent)) {
+    context.situation = 'appreciation response'
+    context.emotionalTone = 'warm and professional'
+  }
+
+  return context
+}
+
+function selectTonePreset(persona, contextSignals) {
+  // Default to the default tone preset
+  let selectedPreset = persona.tonePresets.default
+
+  // Situation-specific tone presets
+  const situationalPresets = {
+    negotiation: {
+      style: 'firm but polite',
+      context: 'Focus on value proposition while maintaining collaborative tone. Be clear about positions while keeping doors open for discussion.'
+    },
+    support: {
+      style: 'helpful and empathetic',
+      context: 'Acknowledge the issue, show understanding, and focus on solutions. Be clear and thorough in explanations.'
+    },
+    'technical discussion': {
+      style: 'precise and technical',
+      context: 'Use domain expertise to provide accurate, technical responses while maintaining accessibility.'
+    },
+    'urgent matter': {
+      style: 'prompt and direct',
+      context: 'Address the urgency while maintaining composure. Focus on immediate next steps and clear timelines.'
+    },
+    'issue resolution': {
+      style: 'apologetic and constructive',
+      context: 'Take ownership of the situation, express genuine apology, and focus on solutions and prevention.'
+    },
+    'appreciation response': {
+      style: 'warm and gracious',
+      context: 'Express genuine appreciation while maintaining professional boundaries.'
+    }
+  }
+
+  // Select situation-specific preset if available
+  if (situationalPresets[contextSignals.situation]) {
+    selectedPreset = {
+      ...selectedPreset,
+      ...situationalPresets[contextSignals.situation]
+    }
+  }
+
+  return selectedPreset
+}
+
+async function generateReply(emailContent, customInstruction = '') {
   const settings = await getStoredSettings()
   
   if (!settings.openaiApiKey) 
@@ -73,15 +209,15 @@ async function generateReply(emailContent) {
       'Authorization': `Bearer ${settings.openaiApiKey}`
     },
     body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: generateSystemPrompt(settings.persona, emailContent)
+          content: generateSystemPrompt(settings.persona, emailContent, customInstruction)
         },
         {
           role: 'user',
-          content: 'Write a reply that addresses the key points while maintaining natural variation in writing style. Format the email with exactly one empty line after the greeting and before the signature.'
+          content: customInstruction || 'Write a reply that addresses the key points while maintaining natural variation in writing style. Format the email with exactly one empty line after the greeting and before the signature.'
         }
       ],
       max_tokens: 500,
@@ -157,7 +293,7 @@ async function generateReply(emailContent) {
 // Handle messages from content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'GENERATE_REPLY') {
-    generateReply(request.emailContent)
+    generateReply(request.emailContent, request.customInstruction)
       .then(response => sendResponse({ success: true, reply: response }))
       .catch(error => sendResponse({ success: false, error: error.message }))
     return true // Required for async response

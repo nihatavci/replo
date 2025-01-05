@@ -3,21 +3,75 @@ const state = {
   isConnected: false,
   retryCount: 0,
   maxRetries: 3,
-  retryDelay: 1000
+  retryDelay: 1000,
+  port: null
 }
 
 // Connection management
 function setupConnection() {
-  const port = chrome.runtime.connect({ name: 'email-assistant' })
-  
-  port.onDisconnect.addListener(() => {
-    state.isConnected = false
-    retryConnection()
-  })
+  try {
+    state.port = chrome.runtime.connect({ name: 'email-assistant' })
+    
+    state.port.onDisconnect.addListener(() => {
+      state.isConnected = false
+      state.port = null
+      
+      // Check if disconnection was due to context invalidation
+      if (chrome.runtime.lastError?.message?.includes('Extension context invalidated')) {
+        handleContextInvalidation()
+      } else {
+        retryConnection()
+      }
+    })
 
-  state.isConnected = true
-  state.retryCount = 0
-  return port
+    state.isConnected = true
+    state.retryCount = 0
+    return state.port
+  } catch (error) {
+    if (error.message.includes('Extension context invalidated')) {
+      handleContextInvalidation()
+    }
+    throw error
+  }
+}
+
+function handleContextInvalidation() {
+  // Remove existing button to prevent further clicks
+  const button = document.querySelector('.ai-reply-button')
+  if (button) button.remove()
+  
+  // Show reload notification
+  showNotification(
+    'Extension Update Required',
+    'The extension needs to be reloaded. Please refresh the page to continue.',
+    'error'
+  )
+}
+
+function showNotification(title, message, type = 'info') {
+  const notification = document.createElement('div')
+  notification.className = `ai-notification ai-design-system ${type}`
+  notification.style.cssText = `
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    padding: 12px 16px;
+    z-index: 10000;
+    max-width: 320px;
+    animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  `
+  
+  notification.innerHTML = `
+    <h4>${title}</h4>
+    <p>${message}</p>
+  `
+  
+  document.body.appendChild(notification)
+  
+  setTimeout(() => {
+    notification.style.animation = 'slideOut 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+    setTimeout(() => notification.remove(), 300)
+  }, 4700)
 }
 
 function retryConnection() {
@@ -28,7 +82,14 @@ function retryConnection() {
         setupConnection()
         addReplyButton()
       } catch (e) {
-        console.log(`Retry ${state.retryCount} failed, retrying...`)
+        console.log(`Retry ${state.retryCount} failed, retrying...`, e)
+        if (state.retryCount === state.maxRetries) {
+          showNotification(
+            'Connection Failed',
+            'Unable to connect to the extension. Please refresh the page.',
+            'error'
+          )
+        }
       }
     }, state.retryDelay * state.retryCount)
   }
@@ -38,16 +99,27 @@ function retryConnection() {
 async function sendMessage(message) {
   return new Promise((resolve, reject) => {
     try {
+      if (!state.isConnected) {
+        setupConnection()
+      }
+      
       chrome.runtime.sendMessage(message, response => {
-        if (chrome.runtime.lastError) {
+        const error = chrome.runtime.lastError
+        if (error) {
           state.isConnected = false
-          reject(new Error(chrome.runtime.lastError.message))
+          if (error.message.includes('Extension context invalidated')) {
+            handleContextInvalidation()
+          }
+          reject(new Error(error.message))
         } else {
           resolve(response)
         }
       })
     } catch (error) {
       state.isConnected = false
+      if (error.message.includes('Extension context invalidated')) {
+        handleContextInvalidation()
+      }
       reject(error)
     }
   })
@@ -57,35 +129,26 @@ async function handleReplyClick() {
   const button = document.querySelector('.ai-reply-button')
   if (!button) return
   
-  const originalText = button.textContent
-  
   try {
-    // Add debug logging
-    console.log('Debugging email elements:')
-    debugEmailElements()
-
-    // Check connection
     if (!state.isConnected) {
       setupConnection()
-      if (!state.isConnected) {
-        throw new Error('Unable to connect to extension')
-      }
     }
 
-    // Update button state
-    button.textContent = 'Generating...'
     button.disabled = true
+    button.classList.add('loading')
+    const originalContent = button.innerHTML
+    button.innerHTML = '<span>Generating...</span>'
 
-    // Get email content
     const emailContent = getEmailContext()
+    if (!emailContent) {
+      throw new Error('Unable to extract email content')
+    }
 
-    // Send request
     const response = await sendMessage({
       type: 'GENERATE_REPLY',
       emailContent
     })
 
-    // Handle response
     if (response?.success) {
       insertReply(response.reply)
     } else {
@@ -96,15 +159,20 @@ async function handleReplyClick() {
     console.error('Error:', error)
     
     if (error.message.includes('Extension context invalidated')) {
-      alert('Extension was updated. Please refresh the page.')
+      handleContextInvalidation()
     } else {
-      alert(error.message || 'Failed to generate reply. Please try again.')
+      showNotification(
+        'Error Generating Reply',
+        error.message || 'An unexpected error occurred',
+        'error'
+      )
     }
   } finally {
-    // Reset button state
-    if (button) {
-      button.textContent = originalText
-      button.disabled = false
+    const currentButton = document.querySelector('.ai-reply-button')
+    if (currentButton) {
+      currentButton.innerHTML = originalContent
+      currentButton.disabled = false
+      currentButton.classList.remove('loading')
     }
   }
 }
@@ -112,46 +180,159 @@ async function handleReplyClick() {
 // Add reply button to email interface
 function addReplyButton() {
   // Remove any existing buttons first
-  const existingButton = document.querySelector('.ai-reply-button')
+  const existingButton = document.querySelector('.ai-button-container')
   if (existingButton) existingButton.remove()
 
-  const button = document.createElement('button')
-  button.textContent = 'Generate AI Reply'
-  button.className = 'ai-reply-button'
-  button.style.cssText = `
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    padding: 10px 20px;
-    background: #0066cc;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    z-index: 9999;
-    transition: opacity 0.2s;
-  `
-  
-  button.addEventListener('click', handleReplyClick)
-  document.body.appendChild(button)
+  // Create button container
+  const container = document.createElement('div')
+  container.className = 'ai-button-container ai-design-system'
 
-  // Add hover effect
-  button.addEventListener('mouseover', () => {
-    button.style.opacity = '0.9'
-  })
-  button.addEventListener('mouseout', () => {
-    button.style.opacity = '1'
-  })
+  // Create quick actions menu
+  const quickActions = document.createElement('div')
+  quickActions.className = 'ai-quick-actions'
 
-  // Add disabled state styles
-  const style = document.createElement('style')
-  style.textContent = `
-    .ai-reply-button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
+  // Add quick reply options
+  const quickReplies = [
+    {
+      label: '✨ Custom Reply',
+      action: () => {
+        // Remove existing custom input if any
+        const existingInput = document.querySelector('.ai-custom-input-container')
+        if (existingInput) return // Don't create another if one exists
+
+        const inputContainer = document.createElement('div')
+        inputContainer.className = 'ai-custom-input-container'
+        
+        const input = document.createElement('input')
+        input.className = 'ai-custom-input'
+        input.placeholder = 'Type custom instruction...'
+        
+        const submitButton = document.createElement('button')
+        submitButton.className = 'ai-custom-button'
+        submitButton.innerHTML = '➤'
+        submitButton.title = 'Submit'
+        
+        const closeButton = document.createElement('button')
+        closeButton.className = 'ai-custom-button'
+        closeButton.innerHTML = '×'
+        closeButton.title = 'Close'
+        
+        const buttonContainer = document.createElement('div')
+        buttonContainer.className = 'ai-custom-buttons'
+        buttonContainer.appendChild(submitButton)
+        buttonContainer.appendChild(closeButton)
+        
+        inputContainer.appendChild(input)
+        inputContainer.appendChild(buttonContainer)
+        
+        async function handleSubmit() {
+          const instruction = input.value.trim()
+          if (instruction) {
+            input.disabled = true
+            submitButton.disabled = true
+            try {
+              const response = await sendMessage({
+                type: 'GENERATE_REPLY',
+                emailContent: getEmailContext(),
+                customInstruction: instruction
+              })
+              if (response?.success) {
+                insertReply(response.reply)
+                inputContainer.remove()
+              }
+            } catch (error) {
+              showNotification('Error', error.message, 'error')
+              input.disabled = false
+              submitButton.disabled = false
+            }
+          }
+        }
+        
+        input.addEventListener('keypress', async (e) => {
+          if (e.key === 'Enter') {
+            handleSubmit()
+          }
+        })
+        
+        submitButton.addEventListener('click', handleSubmit)
+        closeButton.addEventListener('click', () => inputContainer.remove())
+        
+        quickActions.insertBefore(inputContainer, quickActions.firstChild)
+        input.focus()
+      }
+    },
+    {
+      label: '👋 Quick Thanks',
+      action: async () => {
+        try {
+          const response = await sendMessage({
+            type: 'GENERATE_REPLY',
+            emailContent: getEmailContext(),
+            customInstruction: 'Generate a brief thank you reply, keep it short and simple.'
+          })
+          if (response?.success) {
+            insertReply(response.reply)
+          }
+        } catch (error) {
+          showNotification('Error', error.message, 'error')
+        }
+      }
+    },
+    {
+      label: '📅 Follow Up',
+      action: async () => {
+        try {
+          const response = await sendMessage({
+            type: 'GENERATE_REPLY',
+            emailContent: getEmailContext(),
+            customInstruction: 'Generate a follow-up reply asking about the status or next steps.'
+          })
+          if (response?.success) {
+            insertReply(response.reply)
+          }
+        } catch (error) {
+          showNotification('Error', error.message, 'error')
+        }
+      }
+    },
+    {
+      label: '🚫 Unsubscribe',
+      action: async () => {
+        try {
+          const response = await sendMessage({
+            type: 'GENERATE_REPLY',
+            emailContent: getEmailContext(),
+            customInstruction: 'Generate a polite but firm unsubscribe request. Keep it professional and concise.'
+          })
+          if (response?.success) {
+            insertReply(response.reply)
+          }
+        } catch (error) {
+          showNotification('Error', error.message, 'error')
+        }
+      }
     }
-  `
-  document.head.appendChild(style)
+  ]
+
+  // Add quick reply buttons
+  quickReplies.forEach(({ label, action }) => {
+    const button = document.createElement('button')
+    button.className = 'ai-reply-button secondary'
+    button.textContent = label
+    button.addEventListener('click', action)
+    quickActions.appendChild(button)
+  })
+
+  // Create main button
+  const mainButton = document.createElement('button')
+  mainButton.className = 'ai-reply-button'
+  mainButton.innerHTML = '<span>✍️ AI Reply</span>'
+  mainButton.addEventListener('click', handleReplyClick)
+
+  // Assemble the components
+  container.appendChild(quickActions)
+  container.appendChild(mainButton)
+  document.body.appendChild(container)
 }
 
 function getEmailContext() {
@@ -245,44 +426,332 @@ function debugEmailElements() {
 }
 
 function insertReply(replyText) {
-  // Gmail compose box selector
   const replyBox = document.querySelector('[role="textbox"]')
   
   if (replyBox) {
-    // Gmail uses contenteditable divs
     replyBox.innerHTML = replyText
     replyBox.focus()
     return true
   }
 
-  // Fallback popup if no reply box found
+  // Create backdrop
+  const backdrop = document.createElement('div')
+  backdrop.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(4px);
+    z-index: 9999;
+    animation: fadeIn 0.2s ease-out;
+  `
+
+  // Create popup
   const popup = document.createElement('div')
+  popup.className = 'ai-popup ai-design-system'
   popup.style.cssText = `
     position: fixed;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    padding: 20px;
-    background: white;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    width: min(600px, 90vw);
+    max-height: 90vh;
     z-index: 10000;
-    max-width: 80%;
-    max-height: 80%;
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
   `
-  
+
   popup.innerHTML = `
-    <h3>Generated Reply:</h3>
-    <pre style="white-space: pre-wrap;">${replyText}</pre>
-    <button onclick="this.parentElement.remove()">Close</button>
-    <button onclick="navigator.clipboard.writeText(this.previousElementSibling.previousElementSibling.textContent);this.textContent='Copied!'">Copy to Clipboard</button>
+    <div class="ai-popup-header">
+      <h3>Generated Reply</h3>
+    </div>
+    <div class="ai-popup-content">
+      <pre style="margin: 0; padding: 16px; background: white; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-x: auto;">${replyText}</pre>
+    </div>
+    <div class="ai-popup-footer">
+      <button class="ai-popup-button secondary" onclick="this.closest('.ai-popup').remove();document.querySelector('.ai-backdrop').remove()">Close</button>
+      <button class="ai-popup-button" onclick="navigator.clipboard.writeText(this.closest('.ai-popup').querySelector('pre').textContent);this.textContent='Copied!'">Copy to Clipboard</button>
+    </div>
   `
-  
+
+  backdrop.className = 'ai-backdrop'
+  document.body.appendChild(backdrop)
   document.body.appendChild(popup)
+
+  // Close on backdrop click
+  backdrop.addEventListener('click', () => {
+    popup.remove()
+    backdrop.remove()
+  })
+
   return false
 }
+
+// Add design system styles
+const style = document.createElement('style')
+style.textContent = `
+  .ai-design-system {
+    --ai-bg-primary: #000000;
+    --ai-bg-secondary: #ffffff;
+    --ai-bg-tertiary: #f7f7f7;
+    --ai-text-primary: #000000;
+    --ai-text-secondary: #666666;
+    --ai-accent: #000000;
+    --ai-accent-hover: #333333;
+    --ai-border: #e0e0e0;
+    --ai-border-focus: #000000;
+    --ai-border-radius: 8px;
+    --ai-transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    --ai-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    --ai-shadow-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --ai-font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  @keyframes shine {
+    0% { background-position: 200% center; }
+    100% { background-position: -200% center; }
+  }
+
+  .ai-button-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column-reverse;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .ai-quick-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    opacity: 0;
+    transform: translateY(10px);
+    pointer-events: none;
+    transition: var(--ai-transition);
+    position: absolute;
+    bottom: calc(100% - 16px);
+    right: 0;
+    padding-bottom: 24px;
+    min-width: max-content;
+  }
+
+  .ai-button-container:hover .ai-quick-actions {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: all;
+  }
+
+  .ai-reply-button {
+    font-family: var(--ai-font);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    background: var(--ai-accent);
+    color: white;
+    border: none;
+    border-radius: var(--ai-border-radius);
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: var(--ai-transition);
+    transform-origin: center;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+    box-shadow: var(--ai-shadow);
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    isolation: isolate;
+  }
+
+  .ai-reply-button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--ai-shadow-lg);
+  }
+
+  .ai-reply-button:active {
+    transform: translateY(0);
+  }
+
+  .ai-reply-button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .ai-reply-button.loading {
+    background: var(--ai-accent-hover);
+  }
+
+  .ai-reply-button.secondary {
+    background: var(--ai-bg-secondary);
+    color: var(--ai-text-primary);
+    border: 1px solid var(--ai-border);
+  }
+
+  .ai-reply-button.secondary:hover {
+    background: var(--ai-bg-tertiary);
+    border-color: var(--ai-text-secondary);
+  }
+
+  .ai-custom-input {
+    font-family: var(--ai-font);
+    font-size: 13px;
+    padding: 10px 16px;
+    background: var(--ai-bg-secondary);
+    color: var(--ai-text-primary);
+    border: 1px solid var(--ai-border);
+    border-radius: var(--ai-border-radius);
+    width: 200px;
+    transition: var(--ai-transition);
+    box-shadow: var(--ai-shadow);
+  }
+
+  .ai-custom-input:focus {
+    outline: none;
+    border-color: var(--ai-border-focus);
+    box-shadow: var(--ai-shadow-lg);
+    transform: translateY(-1px);
+  }
+
+  /* Notification styles */
+  .ai-notification {
+    background: var(--ai-bg-secondary);
+    border: 1px solid var(--ai-border);
+    color: var(--ai-text-primary);
+    box-shadow: var(--ai-shadow-lg);
+    border-radius: var(--ai-border-radius);
+  }
+
+  .ai-notification.error {
+    background: #fafafa;
+    border-color: #e0e0e0;
+    color: #000000;
+  }
+
+  .ai-notification.success {
+    background: #fafafa;
+    border-color: #e0e0e0;
+    color: #000000;
+  }
+
+  /* Popup styles */
+  .ai-popup {
+    background: var(--ai-bg-secondary);
+    border: 1px solid var(--ai-border);
+    box-shadow: var(--ai-shadow-lg);
+    border-radius: var(--ai-border-radius);
+    overflow: hidden;
+  }
+
+  .ai-popup-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--ai-border);
+  }
+
+  .ai-popup-content {
+    padding: 16px;
+    background: var(--ai-bg-tertiary);
+  }
+
+  .ai-popup-footer {
+    padding: 16px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    border-top: 1px solid var(--ai-border);
+  }
+
+  .ai-popup-button {
+    font-family: var(--ai-font);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    background: var(--ai-accent);
+    color: white;
+    border: none;
+    border-radius: var(--ai-border-radius);
+    cursor: pointer;
+    transition: var(--ai-transition);
+  }
+
+  .ai-popup-button:hover {
+    background: var(--ai-accent-hover);
+  }
+
+  .ai-popup-button.secondary {
+    background: var(--ai-bg-secondary);
+    color: var(--ai-text-primary);
+    border: 1px solid var(--ai-border);
+  }
+
+  .ai-popup-button.secondary:hover {
+    background: var(--ai-bg-tertiary);
+  }
+
+  .ai-custom-input-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--ai-bg-secondary);
+    padding: 4px;
+    border-radius: var(--ai-border-radius);
+    box-shadow: var(--ai-shadow);
+    border: 1px solid var(--ai-border);
+  }
+
+  .ai-custom-input {
+    flex: 1;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+    width: auto;
+    padding: 6px 8px;
+  }
+
+  .ai-custom-input:focus {
+    outline: none;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .ai-custom-buttons {
+    display: flex;
+    gap: 2px;
+  }
+
+  .ai-custom-button {
+    padding: 6px 8px;
+    border: none;
+    background: transparent;
+    color: var(--ai-text-secondary);
+    cursor: pointer;
+    border-radius: var(--ai-border-radius);
+    line-height: 1;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--ai-transition);
+  }
+
+  .ai-custom-button:hover {
+    background: var(--ai-bg-tertiary);
+    color: var(--ai-text-primary);
+  }
+
+  .ai-custom-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`
+document.head.appendChild(style)
 
 // Initialize
 try {

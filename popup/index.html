@@ -2,40 +2,263 @@
 <html>
 <head>
   <title>AI Email Assistant</title>
-  <link rel="stylesheet" href="../styles/popup.css">
+  <style>
+    :root {
+      --ai-bg-primary: #000000;
+      --ai-bg-secondary: #ffffff;
+      --ai-bg-tertiary: #f7f7f7;
+      --ai-text-primary: #000000;
+      --ai-text-secondary: #666666;
+      --ai-accent: #000000;
+      --ai-accent-hover: #333333;
+      --ai-border: #e0e0e0;
+      --ai-border-focus: #000000;
+      --ai-border-radius: 8px;
+      --ai-transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      --ai-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      --ai-shadow-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --ai-font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 400px;
+      font-family: var(--ai-font);
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text-primary);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      padding: 20px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--ai-border);
+    }
+
+    .header h2 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--ai-text-primary);
+      letter-spacing: -0.01em;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-button {
+      padding: 8px;
+      background: transparent;
+      border: none;
+      border-radius: var(--ai-border-radius);
+      cursor: pointer;
+      transition: var(--ai-transition);
+      color: var(--ai-text-secondary);
+    }
+
+    .icon-button:hover {
+      background: var(--ai-bg-tertiary);
+      color: var(--ai-text-primary);
+    }
+
+    .section {
+      background: var(--ai-bg-tertiary);
+      border-radius: var(--ai-border-radius);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .section-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ai-text-secondary);
+      letter-spacing: 0.01em;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--ai-text-primary);
+      margin-bottom: 6px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      font-family: var(--ai-font);
+      font-size: 13px;
+      background: var(--ai-bg-secondary);
+      border: 1px solid var(--ai-border);
+      border-radius: var(--ai-border-radius);
+      transition: var(--ai-transition);
+      color: var(--ai-text-primary);
+    }
+
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--ai-border-focus);
+      box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.1);
+    }
+
+    textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    button {
+      font-family: var(--ai-font);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 10px 16px;
+      background: var(--ai-accent);
+      color: white;
+      border: none;
+      border-radius: var(--ai-border-radius);
+      cursor: pointer;
+      transition: var(--ai-transition);
+    }
+
+    button:hover {
+      background: var(--ai-accent-hover);
+    }
+
+    button.secondary {
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text-primary);
+      border: 1px solid var(--ai-border);
+    }
+
+    button.secondary:hover {
+      background: var(--ai-bg-tertiary);
+      border-color: var(--ai-text-secondary);
+    }
+
+    .field-group {
+      margin-bottom: 16px;
+    }
+
+    .field-group:last-child {
+      margin-bottom: 0;
+    }
+
+    .status {
+      font-size: 13px;
+      padding: 12px;
+      margin-top: 16px;
+      background: var(--ai-bg-tertiary);
+      border-radius: var(--ai-border-radius);
+      opacity: 0;
+      transition: var(--ai-transition);
+    }
+
+    .status.show {
+      opacity: 1;
+    }
+
+    .status.success {
+      background: #f7f7f7;
+      color: #000000;
+    }
+
+    .status.error {
+      background: #f7f7f7;
+      color: #000000;
+    }
+  </style>
 </head>
 <body>
   <div class="container">
-    <h2>AI Email Assistant</h2>
-    
-    <div class="settings">
-      <h3>API Settings</h3>
-      <label for="apiKey">OpenAI API Key:</label>
-      <input type="password" id="apiKey" placeholder="Enter your API key">
+    <div class="header">
+      <h2>AI Email Assistant</h2>
+      <div class="header-actions">
+        <button class="icon-button" title="Help">❔</button>
+      </div>
     </div>
 
-    <div class="persona-settings">
-      <h3>Persona Settings</h3>
-      <label for="name">Your Name:</label>
-      <input type="text" id="name" placeholder="Enter your name">
-      
-      <label for="role">Professional Role:</label>
-      <input type="text" id="role" placeholder="e.g., Software Engineer, Marketing Manager">
-      
-      <label for="style">Writing Style:</label>
-      <select id="style">
-        <option value="professional">Professional</option>
-        <option value="friendly">Friendly</option>
-        <option value="casual">Casual</option>
-        <option value="formal">Formal</option>
-      </select>
-      
-      <label for="context">Additional Context:</label>
-      <textarea id="context" placeholder="Add any specific details about your role, company, or communication preferences"></textarea>
+    <div class="section">
+      <div class="section-header">
+        <h3>API Configuration</h3>
+      </div>
+      <div class="field-group">
+        <label for="apiKey">OpenAI API Key</label>
+        <input type="password" id="apiKey" placeholder="Enter your API key">
+      </div>
     </div>
 
-    <button id="saveSettings">Save Settings</button>
-    <div class="status" id="status"></div>
+    <div class="section">
+      <div class="button-group">
+        <select id="activePersona" style="flex: 1"></select>
+        <button id="newPersona" class="secondary">New</button>
+        <button id="deletePersona" class="secondary">Delete</button>
+      </div>
+
+      <div class="persona-details">
+        <div class="field-group">
+          <label for="name">Name</label>
+          <input type="text" id="name" placeholder="Your name">
+        </div>
+        
+        <div class="field-group">
+          <label for="role">Professional Role</label>
+          <input type="text" id="role" placeholder="e.g., Marketing Manager, Software Engineer">
+        </div>
+
+        <div class="field-group">
+          <label for="defaultStyle">Communication Style</label>
+          <select id="defaultStyle">
+            <option value="professional">Professional</option>
+            <option value="friendly">Friendly</option>
+            <option value="casual">Casual</option>
+            <option value="formal">Formal</option>
+          </select>
+        </div>
+
+        <div class="field-group">
+          <label for="businessContext">Business Context</label>
+          <textarea id="businessContext" placeholder="Details about your business role, company, and professional context"></textarea>
+        </div>
+        
+        <div class="field-group">
+          <label for="technicalContext">Technical Context</label>
+          <textarea id="technicalContext" placeholder="Technical expertise, domain knowledge, and capabilities"></textarea>
+        </div>
+        
+        <div class="field-group">
+          <label for="personalContext">Personal Context</label>
+          <textarea id="personalContext" placeholder="Personal brand, communication preferences, unique traits"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <button id="saveSettings">Save Changes</button>
+    <div id="status" class="status"></div>
   </div>
   <script src="popup.js"></script>
 </body>
